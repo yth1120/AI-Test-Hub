@@ -1,0 +1,738 @@
+// TestHub Pro - Prisma Schema
+// 完整的数据库模型定义，包含需求、测试计划、测试用例、测试脚本和系统设置
+
+generator client {
+  provider = "prisma-client-js"
+  // native = 本机开发引擎；linux-musl-openssl-3.0.x = Alpine 容器引擎（见 Dockerfile）
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ==================== 认证与多租户 ====================
+
+enum Role {
+  ADMIN
+  PM
+  QA
+  DEV
+  VIEWER
+}
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String    @unique
+  emailVerified DateTime?
+  image         String?
+  passwordHash  String?   // bcrypt/argon2 hash，Credentials 登录使用
+
+  // 关联
+  accounts      Account[]
+  sessions      Session[]
+  ownedProjects Project[]         @relation("ProjectOwner")
+  memberships   ProjectMembership[]
+  auditLogs     AuditLog[]
+  comments      Comment[]
+  attachments   Attachment[]
+  notifications Notification[]
+
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@map("users")
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+  @@map("accounts")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@map("verification_tokens")
+}
+
+model ProjectMembership {
+  id        String   @id @default(cuid())
+  userId    String
+  projectId String
+  role      Role     @default(VIEWER)
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([userId, projectId])
+  @@index([userId])
+  @@index([projectId])
+  @@map("project_memberships")
+}
+
+// ==================== 核心模型 ====================
+
+// 项目模型
+model Project {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  status      String @default("ACTIVE")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // 归属与成员（团队版）
+  ownerId     String?
+  owner       User?    @relation("ProjectOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  memberships ProjectMembership[]
+
+  // 关联关系
+  requirements Requirement[]
+  testPlans    TestPlan[]
+  testCases    TestCase[]
+  testScripts  TestScript[]
+  settings     ProjectSettings?
+  defects      Defect[]
+
+  // Agent 关联
+  agentConfigs    AgentConfig[]
+  agentWorkflows  AgentWorkflow[]
+  testPoints      TestPoint[]
+
+  // 团队协作
+  executionRounds TestExecutionRound[]
+
+  @@index([ownerId])
+  @@map("projects")
+}
+
+// 需求模型 - 支持层级结构
+model Requirement {
+  id          String   @id @default(cuid())
+  title       String
+  description String?
+  author      String?          // 需求创建者
+  status      String @default("DRAFT")
+  priority    String @default("MEDIUM")
+
+  // 层级管理
+  parentId    String?
+  parent      Requirement? @relation("RequirementHierarchy", fields: [parentId], references: [id], onDelete: Cascade)
+  children    Requirement[] @relation("RequirementHierarchy")
+
+  // 测试覆盖率统计
+  testCoverage Int     @default(0) // 百分比 0-100
+
+  // 外键
+  projectId   String
+  project     Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  // 时间戳
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // 关联关系
+  testCases   TestCase[]
+  testPlans   TestPlanRequirement[]
+  generatedContents GeneratedContent[]
+  testPoints  TestPoint[]
+  diagnosticReports DiagnosticReport[]
+
+  @@index([projectId])
+  @@index([parentId])
+  @@map("requirements")
+}
+
+// 测试计划模型
+model TestPlan {
+  id          String   @id @default(cuid())
+  title       String
+  description String?
+
+  // 测试周期
+  startDate   DateTime?
+  endDate     DateTime?
+
+  // 测试策略和范围
+  strategy    String?  // Markdown 格式
+  scope       String?  // 测试范围描述
+  risks       String?  // 风险评估
+  resources   String?  // 资源分配
+
+  status      String @default("DRAFT")
+
+  // 外键
+  projectId   String
+  project     Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  // 时间戳
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // 关联关系 - 多对多
+  requirements TestPlanRequirement[]
+  testCases    TestCase[]
+
+  @@index([projectId])
+  @@map("test_plans")
+}
+
+// 测试计划与需求的关联表（多对多）
+model TestPlanRequirement {
+  id            String @id @default(cuid())
+  testPlanId    String
+  requirementId String
+
+  testPlan    TestPlan    @relation(fields: [testPlanId], references: [id], onDelete: Cascade)
+  requirement Requirement @relation(fields: [requirementId], references: [id], onDelete: Cascade)
+
+  createdAt   DateTime @default(now())
+
+  @@unique([testPlanId, requirementId])
+  @@index([testPlanId])
+  @@index([requirementId])
+  @@map("test_plan_requirements")
+}
+
+// 测试用例模型
+model TestCase {
+  id            String   @id @default(cuid())
+  title         String
+  description   String?
+  author        String?          // 测试用例创建者
+
+  // 测试用例核心字段
+  preconditions String?  // 前置条件
+  steps         String   // 测试步骤 (JSON 数组格式存储)
+  expectedResult String // 预期结果
+
+  // 分类和状态
+  priority      String @default("MEDIUM")
+  status        String @default("PENDING")
+  category      String @default("FUNCTIONAL")
+
+  // 追溯关系
+  requirementId String
+  requirement   Requirement @relation(fields: [requirementId], references: [id], onDelete: Cascade)
+
+  testPlanId    String?
+  testPlan      TestPlan?   @relation(fields: [testPlanId], references: [id], onDelete: SetNull)
+
+  // 外键
+  projectId     String
+  project       Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  // 时间戳
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // 关联关系
+  executions    TestExecution[]
+  defects       Defect[]
+  testScripts   TestScript[]
+  testPointId   String?
+  testPoint     TestPoint? @relation(fields: [testPointId], references: [id], onDelete: SetNull)
+  selfHealingRecords SelfHealingRecord[]
+
+  @@index([projectId])
+  @@index([requirementId])
+  @@index([testPlanId])
+  @@index([testPointId])
+  @@map("test_cases")
+}
+
+// 测试执行记录（用于追踪用例执行历史）
+model TestExecution {
+  id           String   @id @default(cuid())
+  status       String
+  actualResult String?
+  notes        String?
+  executedBy   String?
+  executedAt   DateTime @default(now())
+
+  testCaseId   String
+  testCase     TestCase @relation(fields: [testCaseId], references: [id], onDelete: Cascade)
+
+  roundId      String?
+  round        TestExecutionRound? @relation(fields: [roundId], references: [id], onDelete: SetNull)
+
+  @@index([testCaseId])
+  @@index([roundId])
+  @@map("test_executions")
+}
+
+// 测试脚本模型
+model TestScript {
+  id          String   @id @default(cuid())
+  title       String
+  description String?
+
+  // 代码内容
+  code        String   // 脚本代码
+  language    String @default("PYTHON")
+
+  // 文件管理
+  filePath    String?  // 本地文件路径
+
+  // 关联的需求（可选）
+  requirementId String?
+
+  // 关联的测试用例（可选）—— 用于自动化覆盖率统计
+  testCaseId  String?
+  testCase    TestCase? @relation(fields: [testCaseId], references: [id], onDelete: SetNull)
+
+  // 外键
+  projectId   String
+  project     Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  // 时间戳
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([projectId])
+  @@index([testCaseId])
+  @@map("test_scripts")
+}
+
+// AI 生成内容记录
+model GeneratedContent {
+  id          String   @id @default(cuid())
+  type        String
+  content     String   // 生成的内容
+  prompt      String?  // 使用的提示词
+  model       String?  // 使用的 AI 模型
+
+  // 关联的需求
+  requirementId String
+  requirement   Requirement @relation(fields: [requirementId], references: [id], onDelete: Cascade)
+
+  createdAt   DateTime @default(now())
+
+  @@index([requirementId])
+  @@index([type])
+  @@map("generated_contents")
+}
+
+// 项目设置模型
+model ProjectSettings {
+  id          String   @id @default(cuid())
+
+  // AI 配置（API Key 为空时回退到服务端环境变量）
+  apiKey      String?
+  aiProvider  String @default("OPENAI")
+  baseUrl     String?    // 自定义 API 基础 URL
+  model       String?    // 模型名称
+  maxTokens   Int        @default(2000)
+  temperature Float      @default(0.7)
+
+  // 系统提示词配置
+  systemPromptRequirement String?  // 需求生成提示词
+  systemPromptTestPlan    String?  // 测试计划生成提示词
+  systemPromptTestCase    String?  // 测试用例生成提示词
+  systemPromptScript      String?  // 脚本生成提示词
+
+  // 功能开关
+  enableStreaming         Boolean  @default(true)  // 启用流式响应
+
+  // 外键
+  projectId   String     @unique
+  project     Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  updatedAt   DateTime   @updatedAt
+
+  @@map("project_settings")
+}
+
+// ==================== 缺陷模型 ====================
+
+model Defect {
+  id            String   @id @default(cuid())
+  title         String
+  description   String?
+  steps         String?  // 复现步骤
+  severity      String @default("MEDIUM")  // LOW MEDIUM HIGH CRITICAL
+  priority      String @default("MEDIUM")
+  status        String @default("OPEN")    // OPEN IN_PROGRESS RESOLVED CLOSED REOPENED
+  type          String @default("BUG")     // BUG IMPROVEMENT TASK
+
+  // 关联
+  projectId     String
+  project       Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  testCaseId    String?
+  testCase      TestCase? @relation(fields: [testCaseId], references: [id], onDelete: SetNull)
+
+  requirementId String?
+
+  // 人员
+  reporter      String?
+  assignee      String?
+
+  // 环境
+  environment   String?  // 浏览器/OS 等
+
+  // 时间
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  resolvedAt    DateTime?
+
+  // Agent 关联
+  rootCauseReports RootCauseReport[]
+
+  @@index([projectId])
+  @@index([status])
+  @@index([severity])
+  @@map("defects")
+}
+
+// ==================== Agent 工作流模型 ====================
+
+// Agent 配置
+model AgentConfig {
+  id            String   @id @default(cuid())
+  type          String   // QA_ARCHITECT TEST_DESIGNER TEST_DEVELOPER TEST_MAINTAINER
+  name          String
+  description   String?
+  systemPrompt  String
+  tools         String   // JSON 数组格式存储工具列表
+  maxIterations Int      @default(10)
+  temperature   Float    @default(0.7)
+
+  projectId     String
+  project       Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  workflows     AgentWorkflow[]
+
+  @@index([projectId])
+  @@map("agent_configs")
+}
+
+// Agent 工作流
+model AgentWorkflow {
+  id            String   @id @default(cuid())
+  name          String
+  description   String?
+  type          String   // QA_ARCHITECT TEST_DESIGNER TEST_DEVELOPER TEST_MAINTAINER
+  status        String @default("PENDING")  // PENDING RUNNING COMPLETED FAILED CANCELLED
+
+  configId      String?
+  config        AgentConfig? @relation(fields: [configId], references: [id], onDelete: SetNull)
+
+  projectId     String
+  project       Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  tasks         AgentTask[]
+  messages      AgentMessage[]
+
+  @@index([projectId])
+  @@index([type])
+  @@index([status])
+  @@map("agent_workflows")
+}
+
+// Agent 任务
+model AgentTask {
+  id            String   @id @default(cuid())
+  type          String   // Agent 类型
+  action        String   // 具体操作
+  status        String @default("PENDING")  // PENDING RUNNING COMPLETED FAILED CANCELLED
+  input         String   // JSON 格式存储输入数据
+  output        String?  // JSON 格式存储输出数据
+  error         String?
+  metadata      String?  // JSON 格式存储元数据
+
+  workflowId    String
+  workflow      AgentWorkflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+
+  projectId     String
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  completedAt   DateTime?
+
+  executionLogs AgentExecutionLog[]
+
+  @@index([workflowId])
+  @@index([status])
+  @@index([action])
+  @@map("agent_tasks")
+}
+
+// Agent 消息（对话历史）
+model AgentMessage {
+  id            String   @id @default(cuid())
+  role          String   // system user assistant tool
+  content       String
+  toolCalls     String?  // JSON 格式存储工具调用
+  toolResults   String?  // JSON 格式存储工具结果
+
+  workflowId    String
+  workflow      AgentWorkflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+
+  createdAt     DateTime @default(now())
+
+  @@index([workflowId])
+  @@map("agent_messages")
+}
+
+// Agent 执行日志
+model AgentExecutionLog {
+  id            String   @id @default(cuid())
+  iteration     Int      @default(1)
+  action        String
+  input         String
+  output        String
+  error         String?
+  duration      Int      // 毫秒
+
+  taskId        String
+  task          AgentTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  createdAt     DateTime @default(now())
+
+  @@index([taskId])
+  @@map("agent_execution_logs")
+}
+
+// 诊断报告（需求分析结果）
+model DiagnosticReport {
+  id              String   @id @default(cuid())
+  requirementId   String
+  requirement     Requirement @relation(fields: [requirementId], references: [id], onDelete: Cascade)
+  ambiguities     String   // JSON 数组 - 模糊点
+  conflicts       String   // JSON 数组 - 冲突点
+  missingEdgeCases String  // JSON 数组 - 遗漏边界
+  suggestions     String   // JSON 数组 - 建议
+  confidence      Float    @default(0.8)
+
+  projectId       String
+
+  createdAt       DateTime @default(now())
+
+  @@index([requirementId])
+  @@map("diagnostic_reports")
+}
+
+// 测试点（思维导图节点）
+model TestPoint {
+  id              String   @id @default(cuid())
+  title           String
+  description     String?
+  category        String @default("FUNCTIONAL")
+  priority        String @default("MEDIUM")
+  parentId        String?
+
+  requirementId   String
+  requirement     Requirement @relation(fields: [requirementId], references: [id], onDelete: Cascade)
+
+  projectId       String
+  project         Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  testCases       TestCase[]
+
+  @@index([requirementId])
+  @@index([parentId])
+  @@map("test_points")
+}
+
+// 自愈结果记录
+model SelfHealingRecord {
+  id              String   @id @default(cuid())
+  testCaseId      String
+  testCase        TestCase @relation(fields: [testCaseId], references: [id], onDelete: Cascade)
+  originalXPath   String
+  suggestedXPath  String
+  confidence      Float
+  reasoning       String
+  applied         Boolean  @default(false)
+
+  projectId       String
+
+  createdAt       DateTime @default(now())
+
+  @@index([testCaseId])
+  @@map("self_healing_records")
+}
+
+// 根因分析报告
+model RootCauseReport {
+  id              String   @id @default(cuid())
+  defectId        String
+  defect          Defect @relation(fields: [defectId], references: [id], onDelete: Cascade)
+  suspectedCommit String?
+  suspectedAuthor String?
+  affectedFiles   String   // JSON 数组
+  rootCause       String
+  fixSuggestion   String
+  confidence      Float    @default(0.7)
+
+  createdAt       DateTime @default(now())
+
+  @@index([defectId])
+  @@map("root_cause_reports")
+}
+
+// ==================== 团队协作模型 ====================
+
+// 审计日志 —— 记录所有写操作
+model AuditLog {
+  id          String   @id @default(cuid())
+  action      String   // CREATE | UPDATE | DELETE
+  entity      String   // Project | Requirement | TestCase | Defect | TestScript | etc.
+  entityId    String
+  entityTitle String?  // 实体名称快照（实体删除后仍可读）
+  changes     String   // JSON: { field: { old, new } }
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  projectId   String
+
+  createdAt   DateTime @default(now())
+
+  @@index([entity, entityId])
+  @@index([projectId])
+  @@index([userId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+// 评论 —— 需求/用例/缺陷的协作讨论
+model Comment {
+  id          String   @id @default(cuid())
+  content     String
+
+  // 多态关联
+  targetType  String   // Requirement | TestCase | Defect
+  targetId    String
+
+  // 层级
+  parentId    String?
+  parent      Comment?  @relation("CommentReplies", fields: [parentId], references: [id], onDelete: Cascade)
+  replies     Comment[] @relation("CommentReplies")
+
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  projectId   String
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([targetType, targetId])
+  @@index([projectId])
+  @@index([userId])
+  @@map("comments")
+}
+
+// 通知 —— 指派 / 状态变更 / @提及 的站内信
+model Notification {
+  id          String   @id @default(cuid())
+  type        String   // ASSIGNED | STATUS_CHANGED | MENTIONED | COMMENT
+  title       String
+  body        String?
+
+  // 跳转目标（多态，可选）
+  targetType  String?  // Requirement | TestCase | Defect
+  targetId    String?
+
+  read        Boolean  @default(false)
+
+  // 接收者
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  projectId   String
+
+  createdAt   DateTime @default(now())
+
+  @@index([userId, read])
+  @@index([projectId])
+  @@map("notifications")
+}
+
+// 附件 —— 需求/用例/缺陷的截图与文件（本地磁盘 + DB 元数据）
+model Attachment {
+  id          String   @id @default(cuid())
+
+  // 多态关联
+  targetType  String   // Requirement | TestCase | Defect
+  targetId    String
+
+  // 文件元数据
+  filename    String   // 原始文件名
+  storedPath  String   // 服务器相对路径，如 uploads/<projectId>/<id>.<ext>
+  mimeType    String
+  size        Int      // 字节
+
+  uploaderId  String?
+  uploader    User?    @relation(fields: [uploaderId], references: [id], onDelete: SetNull)
+  projectId   String
+
+  createdAt   DateTime @default(now())
+
+  @@index([targetType, targetId])
+  @@index([projectId])
+  @@map("attachments")
+}
+
+// 测试执行轮次 —— 按版本/计划批量执行测试用例
+model TestExecutionRound {
+  id          String   @id @default(cuid())
+  name        String   // 轮次名称，如 "v2.0 回归测试 第1轮"
+  description String?
+  status      String   @default("IN_PROGRESS") // PLANNED | IN_PROGRESS | COMPLETED
+  testPlanId  String?
+  projectId   String
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  startedAt   DateTime @default(now())
+  completedAt DateTime?
+
+  executions  TestExecution[]
+
+  @@index([projectId])
+  @@index([testPlanId])
+  @@map("test_execution_rounds")
+}
+

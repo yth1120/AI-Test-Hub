@@ -1,0 +1,73 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  /* ===== 语义令牌：克制中性（zinc）+ 单一强调（indigo）===== */
+  :root {
+    --canvas: 250 250 250;     /* zinc-50  页面底 */
+    --surface: 255 255 255;    /* white    卡片/面板 */
+    --surface-2: 244 244 245;  /* zinc-100 次级面 */
+    --line: 228 228 231;       /* zinc-200 分隔线/边框 */
+    --ink: 24 24 27;           /* zinc-900 主文字 */
+    --muted: 113 113 122;      /* zinc-500 次文字 */
+    --accent: 99 102 241;      /* indigo-500 */
+  }
+
+  .dark {
+    --canvas: 9 9 11;          /* zinc-950 */
+    --surface: 24 24 27;       /* zinc-900 */
+    --surface-2: 39 39 42;     /* zinc-800 */
+    --line: 39 39 42;          /* zinc-800 */
+    --ink: 244 244 245;        /* zinc-100 */
+    --muted: 161 161 170;      /* zinc-400 */
+    --accent: 129 140 248;     /* indigo-400（暗模式提亮以保对比）*/
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+
+  body {
+    background-color: rgb(var(--canvas));
+    color: rgb(var(--ink));
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* 数字等宽对齐（指标/表格）*/
+  .tnum { font-variant-numeric: tabular-nums; }
+}
+
+@layer components {
+  /* 扁平表面：面色 + hairline + 单一圆角，去阴影盒子感 */
+  .card {
+    @apply bg-surface border border-line rounded-lg;
+  }
+
+  .input {
+    @apply w-full px-3 py-2 bg-surface border border-line rounded-lg text-sm text-ink
+           placeholder:text-muted focus:outline-none focus:ring-2 focus:ring-accent/40
+           focus:border-accent transition-colors;
+  }
+
+  /* 优先级徽章 — 去饱和、语义化（仅真实状态用色）*/
+  .priority-badge-critical { @apply bg-rose-500/10 text-rose-600 dark:text-rose-400 border-transparent; }
+  .priority-badge-high     { @apply bg-amber-500/10 text-amber-600 dark:text-amber-400 border-transparent; }
+  .priority-badge-medium   { @apply bg-surface-2 text-muted border-transparent; }
+  .priority-badge-low      { @apply bg-surface-2 text-muted border-transparent; }
+
+  /* 状态徽章 */
+  .status-badge-approved    { @apply inline-flex items-center px-2 py-0.5 text-xs font-medium rounded-md text-emerald-600 dark:text-emerald-400 bg-emerald-500/10; }
+  .status-badge-in-progress { @apply inline-flex items-center px-2 py-0.5 text-xs font-medium rounded-md text-accent bg-accent/10; }
+  .status-badge-review      { @apply inline-flex items-center px-2 py-0.5 text-xs font-medium rounded-md text-amber-600 dark:text-amber-400 bg-amber-500/10; }
+  .status-badge-draft       { @apply inline-flex items-center px-2 py-0.5 text-xs font-medium rounded-md text-muted bg-surface-2; }
+
+  /* 侧栏项 — 扁平，仅激活用强调 */
+  .sidebar-item          { @apply flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-sm font-medium; }
+  .sidebar-item-active   { @apply bg-accent/10 text-accent; }
+  .sidebar-item-inactive { @apply text-muted hover:bg-surface-2 hover:text-ink; }
+
+  /* 覆盖率条 — 中性轨 */
+  .coverage-bar          { @apply flex items-center w-full max-w-[120px]; }
+  .coverage-bar-progress { @apply w-full bg-surface-2 rounded-full h-1.5 mr-2 overflow-hidden; }
+}
