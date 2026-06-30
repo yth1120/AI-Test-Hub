@@ -1,5 +1,6 @@
 # AI TestHub
-
+<img width="1912" height="948" alt="image" src="https://github.com/user-attachments/assets/4bbc9950-f99a-4ff1-b2c6-5bf01e16d616" />
+<img width="1912" height="948" alt="3194c9f5bdcc56341eeb41dfd757e462" src="https://github.com/user-attachments/assets/d9340eea-c5ca-45fe-b652-03ddeee533bd" />
 AI 驱动的软件测试需求管理工具 —— 支持团队协作、需求追溯、AI 辅助生成测试用例与脚本。
 
 ## 功能特性
